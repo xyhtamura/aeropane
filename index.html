@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aeropane — Physical Glass & Gel Filter</title>
+    <link rel="stylesheet" href="aeropane.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="aeropane-container">
+        <!-- Main Header -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="orb-icon"></span>
+                <h1>Aeropane</h1>
+            </div>
+            <p class="subtitle">physical glass & gel scattering simulator</p>
+        </header>
+
+        <!-- Main Workspace -->
+        <div class="workspace-grid">
+            
+            <!-- Left Panel: Viewport -->
+            <div class="viewport-card glass-panel">
+                <div class="viewport-header">
+                    <div class="view-tabs">
+                        <button class="view-tab active" data-view="aeropane">Aeropane</button>
+                        <button class="view-tab" data-view="original">Original</button>
+                        <button class="view-tab" data-view="heightmap">Glass Map</button>
+                    </div>
+                    <span id="backendStatus" class="status-chip">Backend: WebGL</span>
+                </div>
+
+                <div class="canvas-viewport" id="viewport">
+                    <!-- Welcome Viewport Prompt -->
+                    <div id="viewportPrompt" class="viewport-prompt">
+                        <svg class="cloud-icon" viewBox="0 0 24 24" width="48" height="48">
+                            <path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z"/>
+                        </svg>
+                        <p class="main-prompt">Drag & Drop Image Here</p>
+                        <p class="sub-prompt">or click to browse local files</p>
+                    </div>
+                    
+                    <input type="file" id="imageInput" accept="image/*" style="display: none;">
+                    
+                    <!-- Canvases -->
+                    <canvas id="displayCanvas" hidden></canvas>
+                    <canvas id="hiddenOriginalCanvas" style="display: none;"></canvas>
+                    <canvas id="hiddenHeightCanvas" style="display: none;"></canvas>
+                </div>
+
+                <!-- Pixel Readout Footer -->
+                <div class="viewport-footer">
+                    <div class="pixel-info" id="pixelInfo">hover to inspect pixels</div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Parameters -->
+            <div class="controls-card glass-panel">
+                <h2>Material Substrate</h2>
+                
+                <!-- Preset select -->
+                <div class="control-group">
+                    <label for="presetSelect">Glass Preset</label>
+                    <select id="presetSelect" class="styled-select">
+                        <option value="satinato">Satinato (Fine Acid-Etch)</option>
+                        <option value="sandblast">Sandblasted (Coarse)</option>
+                        <option value="reeded">Reeded / Fluted (Periodic)</option>
+                        <option value="cathedral">Cathedral (Hammered)</option>
+                        <option value="seedy">Seedy (Micro bubbles)</option>
+                        <option value="custom-noise">Custom Noise</option>
+                        <option value="image-map" id="imageMapOption" disabled>Imported Image Map</option>
+                    </select>
+                </div>
+
+                <hr class="divider">
+
+                <!-- Sliders Container -->
+                <div class="sliders-list">
+                    <!-- Distance (d) -->
+                    <div class="dynamic-slider-group" data-param="distance">
+                        <div class="slider-header">
+                            <span class="param-name">Glass Distance (d)</span>
+                            <input type="number" class="val-input" id="valDistance" value="15" step="0.1">
+                        </div>
+                        <input type="range" class="param-slider" id="sliderDistance" min="0" max="100" value="15" step="0.5">
+                        <div class="slider-bounds">
+                            <input type="number" class="min-input" value="0">
+                            <input type="number" class="max-input" value="100">
+                        </div>
+                    </div>
+
+                    <!-- Roughness (alpha) -->
+                    <div class="dynamic-slider-group" data-param="roughness">
+                        <div class="slider-header">
+                            <span class="param-name">Roughness (&alpha;)</span>
+                            <input type="number" class="val-input" id="valRoughness" value="0.25" step="0.01">
+                        </div>
+                        <input type="range" class="param-slider" id="sliderRoughness" min="0" max="1" value="0.25" step="0.01">
+                        <div class="slider-bounds">
+                            <input type="number" class="min-input" value="0">
+                            <input type="number" class="max-input" value="1">
+                        </div>
+                    </div>
+
+                    <!-- Refractive Index (n) -->
+                    <div class="dynamic-slider-group" data-param="ior">
+                        <div class="slider-header">
+                            <span class="param-name">Refraction Index (n)</span>
+                            <input type="number" class="val-input" id="valIor" value="1.52" step="0.01">
+                        </div>
+                        <input type="range" class="param-slider" id="sliderIor" min="1.0" max="2.0" value="1.52" step="0.01">
+                        <div class="slider-bounds">
+                            <input type="number" class="min-input" value="1.0">
+                            <input type="number" class="max-input" value="2.0">
+                        </div>
+                    </div>
+
+                    <!-- Absorption Tint (Beer-Lambert) -->
+                    <div class="control-group tint-picker-group">
+                        <label>Beer-Lambert Absorption</label>
+                        <div class="tint-inputs">
+                            <input type="color" id="tintColor" value="#aaddff" class="styled-color-picker">
+                            <div class="dynamic-slider-group inline-slider" data-param="absorption">
+                                <div class="slider-header inline-header">
+                                    <span class="param-name">Density</span>
+                                    <input type="number" class="val-input" id="valAbsorption" value="0.8" step="0.05">
+                                </div>
+                                <input type="range" class="param-slider" id="sliderAbsorption" min="0" max="5" value="0.8" step="0.1">
+                                <div class="slider-bounds" style="display:none;">
+                                    <input type="number" class="min-input" value="0">
+                                    <input type="number" class="max-input" value="5">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class="divider">
+
+                    <h3>Glass Map Source</h3>
+
+                    <div class="map-source-card" id="mapSourceCard">
+                        <div class="map-source-status">
+                            <span class="map-source-dot" aria-hidden="true"></span>
+                            <div>
+                                <span class="map-source-label">Current source</span>
+                                <strong id="mapSourceName">Procedural: Satinato</strong>
+                            </div>
+                        </div>
+                        <div class="map-source-actions">
+                            <button type="button" id="loadHeightmapBtn" class="mini-action-btn">Load Image Map</button>
+                            <button type="button" id="resetHeightmapBtn" class="mini-action-btn secondary-btn" disabled>Use Procedural</button>
+                        </div>
+                        <input type="file" id="heightmapInput" accept="image/*" hidden>
+                    </div>
+
+                    <div id="importedMapControls" class="map-mode-controls" hidden>
+                        <label class="toggle-row" for="invertHeightmap">
+                            <span>
+                                <strong>Invert Height</strong>
+                                <small>Swap peaks and valleys</small>
+                            </span>
+                            <input type="checkbox" id="invertHeightmap">
+                        </label>
+
+                        <div class="dynamic-slider-group" data-param="mapStrength">
+                            <div class="slider-header">
+                                <span class="param-name">Map Strength</span>
+                                <input type="number" class="val-input" id="valMapStrength" value="1" step="0.05">
+                            </div>
+                            <input type="range" class="param-slider" id="sliderMapStrength" min="0" max="3" value="1" step="0.05">
+                            <div class="slider-bounds">
+                                <input type="number" class="min-input" value="0">
+                                <input type="number" class="max-input" value="3">
+                            </div>
+                        </div>
+
+                        <div class="dynamic-slider-group" data-param="mapBlur">
+                            <div class="slider-header">
+                                <span class="param-name">Map Blur</span>
+                                <input type="number" class="val-input" id="valMapBlur" value="0" step="0.5">
+                            </div>
+                            <input type="range" class="param-slider" id="sliderMapBlur" min="0" max="24" value="0" step="0.5">
+                            <div class="slider-bounds">
+                                <input type="number" class="min-input" value="0">
+                                <input type="number" class="max-input" value="24">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="proceduralMapControls" class="map-mode-controls">
+                        <h3>Procedural Glass Map</h3>
+
+                        <!-- Noise Frequency -->
+                        <div class="dynamic-slider-group" data-param="noiseFreq">
+                        <div class="slider-header">
+                            <span class="param-name">Map Frequency</span>
+                            <input type="number" class="val-input" id="valNoiseFreq" value="0.05" step="0.001">
+                        </div>
+                        <input type="range" class="param-slider" id="sliderNoiseFreq" min="0.001" max="0.3" value="0.05" step="0.001">
+                        <div class="slider-bounds">
+                            <input type="number" class="min-input" value="0.001">
+                            <input type="number" class="max-input" value="0.3">
+                        </div>
+                    </div>
+
+                        <!-- Noise Amplitude -->
+                        <div class="dynamic-slider-group" data-param="noiseAmp">
+                        <div class="slider-header">
+                            <span class="param-name">Map Height</span>
+                            <input type="number" class="val-input" id="valNoiseAmp" value="1.0" step="0.05">
+                        </div>
+                        <input type="range" class="param-slider" id="sliderNoiseAmp" min="0" max="5" value="1.0" step="0.05">
+                        <div class="slider-bounds">
+                            <input type="number" class="min-input" value="0">
+                            <input type="number" class="max-input" value="5">
+                        </div>
+                    </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Playback/Render Transport Bar -->
+        <div class="transport-bar glass-panel">
+            <div class="transport-controls">
+                <button id="cookBtn" class="action-btn gloss-btn">Cook Render</button>
+                <button id="cancelBtn" class="action-btn secondary-btn" disabled>Cancel</button>
+            </div>
+            
+            <!-- Playable progress bar container -->
+            <div class="progress-container">
+                <div class="progress-labels">
+                    <span id="renderState">Idle</span>
+                    <span id="percentLabel">0%</span>
+                </div>
+                <div class="progress-track" id="progressTrack">
+                    <div class="progress-fill" id="progressFill"></div>
+                    <div class="progress-scrubber" id="progressScrubber"></div>
+                </div>
+            </div>
+
+            <div class="export-controls">
+                <input type="text" id="filenameInput" value="aeropane_charmed" class="filename-input">
+                <button id="saveBtn" class="action-btn gloss-btn accent-btn" disabled>Save PNG</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full-screen drag overlay -->
+    <div id="dropZone" class="drop-zone-fullscreen">
+        <div class="drop-prompt">
+            <svg class="cloud-icon" viewBox="0 0 24 24" width="64" height="64">
+                <path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z"/>
+            </svg>
+            <p class="main-prompt" style="font-size: 1.4em;">Drop image anywhere to open</p>
+        </div>
+    </div>
+    
+    <script src="aeropane.js"></script>
+</body>
+</html>
