@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="glass" cx="0" cy="0" r="1" gradientTransform="translate(23 20) rotate(45) scale(49)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset=".28" stop-color="#bff4ff"/>
+      <stop offset=".68" stop-color="#38b6ff"/>
+      <stop offset="1" stop-color="#1d84d6"/>
+    </radialGradient>
+  </defs>
+  <circle cx="32" cy="32" r="27" fill="url(#glass)" stroke="#fff" stroke-width="4"/>
+  <circle cx="23" cy="21" r="5" fill="#fff" opacity=".8"/>
+</svg>
