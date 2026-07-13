@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="aeropane.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="aeropane-container">
@@ -71,6 +71,7 @@
                         <option value="reeded">Reeded / Fluted (Periodic)</option>
                         <option value="cathedral">Cathedral (Hammered)</option>
                         <option value="seedy">Seedy (Micro bubbles)</option>
+                        <option value="liquid">Liquid Glass (Animated)</option>
                         <option value="custom-noise">Custom Noise</option>
                         <option value="image-map" id="imageMapOption" disabled>Imported Image Map</option>
                     </select>
@@ -219,6 +220,63 @@
                             <input type="number" class="max-input" value="5">
                         </div>
                     </div>
+                    </div>
+
+                    <div id="liquidControls" class="map-mode-controls" hidden>
+                        <h3>Liquid Glass</h3>
+                        <p class="liquid-hint">Click &amp; drag on the image to disturb the surface.</p>
+
+                        <!-- Wave Speed (CFL c^2) -->
+                        <div class="dynamic-slider-group" data-param="liquidSpeed">
+                            <div class="slider-header">
+                                <span class="param-name">Wave Speed</span>
+                                <input type="number" class="val-input" id="valLiquidSpeed" value="0.35" step="0.01">
+                            </div>
+                            <input type="range" class="param-slider" id="sliderLiquidSpeed" min="0.02" max="0.49" value="0.35" step="0.01">
+                            <div class="slider-bounds">
+                                <input type="number" class="min-input" value="0.02">
+                                <input type="number" class="max-input" value="0.49">
+                            </div>
+                        </div>
+
+                        <!-- Surface Tension (velocity damping) -->
+                        <div class="dynamic-slider-group" data-param="liquidDamp">
+                            <div class="slider-header">
+                                <span class="param-name">Surface Tension</span>
+                                <input type="number" class="val-input" id="valLiquidDamp" value="0.985" step="0.001">
+                            </div>
+                            <input type="range" class="param-slider" id="sliderLiquidDamp" min="0.9" max="0.999" value="0.985" step="0.001">
+                            <div class="slider-bounds">
+                                <input type="number" class="min-input" value="0.9">
+                                <input type="number" class="max-input" value="0.999">
+                            </div>
+                        </div>
+
+                        <!-- Distortion (refraction gain from wave slope) -->
+                        <div class="dynamic-slider-group" data-param="liquidDistort">
+                            <div class="slider-header">
+                                <span class="param-name">Distortion</span>
+                                <input type="number" class="val-input" id="valLiquidDistort" value="10" step="0.5">
+                            </div>
+                            <input type="range" class="param-slider" id="sliderLiquidDistort" min="0" max="40" value="10" step="0.5">
+                            <div class="slider-bounds">
+                                <input type="number" class="min-input" value="0">
+                                <input type="number" class="max-input" value="40">
+                            </div>
+                        </div>
+
+                        <label class="toggle-row" for="liquidRain">
+                            <span>
+                                <strong>Rain</strong>
+                                <small>Ambient random droplets</small>
+                            </span>
+                            <input type="checkbox" id="liquidRain">
+                        </label>
+
+                        <div class="map-source-actions">
+                            <button type="button" id="liquidDropBtn" class="mini-action-btn">Drop</button>
+                            <button type="button" id="liquidClearBtn" class="mini-action-btn secondary-btn">Calm</button>
+                        </div>
                     </div>
                 </div>
             </div>

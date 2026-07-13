@@ -158,9 +158,21 @@ Gate: one continuum, not modes (per Open questions instinct) — each medium abo
 - **Audio-reactive h**: drive ripple impulses from an audio track's onsets — music-video mode; family kinship with Kíkik's hit extraction.
 - **Inverse problem**: given source and desired output, solve for the pane (deconvolution / optimization). "What glass turns A into B" — probably a research rabbit hole; shelf it consciously.
 
+### Liquid Glass — shipped 2026-07-13
+
+Priority #1 built. The pane can now be a body of water: `h(x,y,t)` evolved live by the 2-D wave equation on the GPU, feeding the refraction shader as the glass map.
+
+- **Sim substrate**: ping-pong on a color-renderable float target (half-float preferred via `OES_texture_half_float` + `EXT_color_buffer_half_float`, float fallback, hard-disable with a UI notice if neither renders). State packed R=height, G=velocity; `CLAMP_TO_EDGE` gives reflective pool walls. This ping-pong FBO substrate is exactly what gel/thin-film/molten will reuse.
+- **Integrator**: explicit velocity form — `vel += c²·laplacian; vel *= damp; h += vel`. Wave-speed knob is clamped to the CFL-stable `c² ≤ 0.49`; damping is the surface-tension/viscosity control. Coarse sim grid (long edge capped ~400) up-samples cleanly through the refractor since ripples are low-frequency — cheap and smooth.
+- **Live loop**: `requestAnimationFrame`, 2 substeps/frame, renders the photo through the current surface each frame. A separate `heightAmpOverride` feeds the wave slope into the existing normal/refraction path (Distortion knob) so the static Map-Height control stays out of it.
+- **Touch**: pointer down/drag on the canvas injects Gaussian impulses (aspect-corrected so drops stay round); **Drop** button = random splash, **Calm** = clear to flat, **Rain** = ambient jittered droplets. This is the "instrument you touch" hook from the motion notes.
+- **Integration**: new `liquid` preset in the Material dropdown; entering swaps in a Liquid controls panel and takes over the canvas; Cook is bypassed (the live view *is* the render) and Save PNG grabs the current frame.
+- **Verified**: half-float target selected, ring propagation lenses the image (≈6% of pixels shift over 30 steps, and visible concentric crests in a render capture), zero console errors. Note: rAF is paused in a hidden/occluded tab (headless verification had to pump the sim manually) — normal for a real viewer.
+- **Deferred / next on this feature**: event-log record so a live performance re-renders offline at Tier-3 quality (the "touch live, cook later" contract); wire caustics once Tier 2 splatting lands (crests should *brighten*, not just displace); viscosity→gel via Hele-Shaw on the same substrate.
+
 ### Suggested priority (leverage per effort)
 
-1. **Ripple PDE + pointer interaction** — liveness, charm, feeds everything temporal
+1. ~~**Ripple PDE + pointer interaction**~~ — **done 2026-07-13** (above)
 2. **Tier 2 splatting** — unlocks caustics, lensing, gravitational, magnification honesty (the biggest single unlock)
 3. **Kolmogorov phase screens** — heat shimmer/seeing, cheap, unique
 4. **Deflection-field plugin refactor** — do it *when* adding source #2, not before

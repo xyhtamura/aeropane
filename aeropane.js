@@ -73,6 +73,22 @@ let originalTexture = null;
 let heightmapTexture = null;
 let positionBuffer = null;
 
+// ─── Liquid Glass (live wave-equation PDE) state ──────────────────────────
+let liquidMode = false;
+let liquidLoopId = null;
+let simProgram = null;
+let simFbo = null;                 // single framebuffer, retargeted each step
+let stateTextures = [null, null];  // ping-pong: R=height, G=velocity
+let stateRead = 0;                 // index of the texture holding current state
+let simW = 0, simH = 0;
+let liquidSupported = null;        // null=unknown, true/false after probe
+let floatTexType = null;           // gl.FLOAT or HALF_FLOAT_OES once resolved
+let activeHeightTex = null;        // when set, refraction pass samples this instead of the canvas map
+let heightAmpOverride = null;      // when set, overrides u_noiseAmp (liquid distortion gain)
+let queuedImpulse = null;          // {u, v, str} consumed by the next sim step
+let pointerDown = false;
+let rainCountdown = 0;
+
 // DOM Elements
 const imageInput = document.getElementById('imageInput');
 const heightmapInput = document.getElementById('heightmapInput');
@@ -275,6 +291,285 @@ function initWebGL(width, height) {
     return true;
 }
 
+// ─── Liquid Glass — GPU wave-equation simulator ───────────────────────────
+// The pane becomes a body of water: h(x,y,t) evolved by the 2-D wave equation
+// on a ping-pong float target. R = surface height, G = surface velocity.
+// The live height field is fed straight into the refraction shader as the
+// glass map, so the photo warps under real ripples. Pointer = a finger in it.
+const simFragSource = `
+    precision highp float;
+    varying vec2 v_uv;
+    uniform sampler2D u_state;   // .r = height, .g = velocity
+    uniform vec2 u_res;
+    uniform float u_c2;          // wave speed^2 * dt^2 (CFL-stable when <= 0.49)
+    uniform float u_damp;        // velocity damping — surface tension / viscosity
+    uniform vec2 u_impulse;      // disturbance centre, uv
+    uniform float u_impStr;      // disturbance amplitude (0 = none this step)
+    uniform float u_impRad;      // disturbance radius, uv
+
+    void main() {
+        vec2 t = 1.0 / u_res;
+        vec2 s = texture2D(u_state, v_uv).rg;
+        float h = s.r;
+        float v = s.g;
+
+        // Laplacian via 4-neighbour stencil (CLAMP_TO_EDGE = reflective walls)
+        float hl = texture2D(u_state, v_uv - vec2(t.x, 0.0)).r;
+        float hr = texture2D(u_state, v_uv + vec2(t.x, 0.0)).r;
+        float hd = texture2D(u_state, v_uv - vec2(0.0, t.y)).r;
+        float hu = texture2D(u_state, v_uv + vec2(0.0, t.y)).r;
+        float lap = hl + hr + hd + hu - 4.0 * h;
+
+        v += u_c2 * lap;   // accelerate toward the mean (restoring force)
+        v *= u_damp;       // bleed energy
+        h += v;            // integrate height
+
+        if (u_impStr != 0.0) {
+            vec2 dd = v_uv - u_impulse;
+            dd.x *= u_res.x / u_res.y;                 // keep drops circular
+            float b = exp(-dot(dd, dd) / (u_impRad * u_impRad));
+            h += b * u_impStr;
+        }
+
+        gl_FragColor = vec4(h, v, 0.0, 1.0);
+    }
+`;
+
+function compileProgram(fragSrc) {
+    const mk = (type, src) => {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+            console.error("Sim shader error:", gl.getShaderInfoLog(sh));
+            return null;
+        }
+        return sh;
+    };
+    const vs = mk(gl.VERTEX_SHADER, vertexShaderSource);
+    const fs = mk(gl.FRAGMENT_SHADER, fragSrc);
+    if (!vs || !fs) return null;
+    const p = gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+        console.error("Sim program link failed.");
+        return null;
+    }
+    return p;
+}
+
+// Probe for a color-renderable float texture type (half-float preferred).
+function pickFloatType() {
+    const test = (type) => {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 4, 4, 0, gl.RGBA, type, null);
+        const fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(fb);
+        gl.deleteTexture(tex);
+        return ok;
+    };
+    const half = gl.getExtension('OES_texture_half_float');
+    if (half) {
+        gl.getExtension('EXT_color_buffer_half_float');
+        if (test(half.HALF_FLOAT_OES)) {
+            floatLinear = !!gl.getExtension('OES_texture_half_float_linear');
+            return half.HALF_FLOAT_OES;
+        }
+    }
+    if (gl.getExtension('OES_texture_float')) {
+        gl.getExtension('WEBGL_color_buffer_float');
+        if (test(gl.FLOAT)) {
+            floatLinear = !!gl.getExtension('OES_texture_float_linear');
+            return gl.FLOAT;
+        }
+    }
+    return null;
+}
+let floatLinear = false;
+
+function makeStateTexture(w, h) {
+    const filter = floatLinear ? gl.LINEAR : gl.NEAREST;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, floatTexType, null);
+    return tex;
+}
+
+// Build (or rebuild) the sim resources to match the current image aspect.
+function initLiquidGL() {
+    if (!gl) return false;
+    if (floatTexType === null) {
+        floatTexType = pickFloatType();
+        if (floatTexType === null) return false;
+    }
+    if (!simProgram) {
+        simProgram = compileProgram(simFragSource);
+        if (!simProgram) return false;
+    }
+    if (!simFbo) simFbo = gl.createFramebuffer();
+
+    // Sim grid: cap the long edge for a smooth, cheap surface. Ripples are
+    // low-frequency, so a coarse grid up-samples cleanly through the refractor.
+    const w = glCanvas.width, h = glCanvas.height;
+    const scale = Math.min(1, 400 / Math.max(w, h));
+    const nw = Math.max(32, Math.round(w * scale));
+    const nh = Math.max(32, Math.round(h * scale));
+    if (nw === simW && nh === simH && stateTextures[0]) {
+        calmLiquid();
+        return true;
+    }
+    simW = nw; simH = nh;
+    stateTextures.forEach(t => t && gl.deleteTexture(t));
+    stateTextures = [makeStateTexture(simW, simH), makeStateTexture(simW, simH)];
+    stateRead = 0;
+    calmLiquid();
+    return true;
+}
+
+// Clear the surface back to flat, still water.
+function calmLiquid() {
+    if (!simFbo || !stateTextures[0]) return;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo);
+    gl.viewport(0, 0, simW, simH);
+    gl.clearColor(0, 0, 0, 1);
+    stateTextures.forEach(tex => {
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+function stepLiquid(impulse) {
+    const c2 = Math.min(0.49, Math.max(0, parseFloat(document.getElementById('valLiquidSpeed').value) || 0.3));
+    const damp = Math.min(1, Math.max(0.9, parseFloat(document.getElementById('valLiquidDamp').value) || 0.985));
+
+    const src = stateTextures[stateRead];
+    const dst = stateTextures[stateRead ^ 1];
+
+    gl.useProgram(simProgram);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, dst, 0);
+    gl.viewport(0, 0, simW, simH);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src);
+
+    const loc = (n) => gl.getUniformLocation(simProgram, n);
+    gl.uniform1i(loc("u_state"), 0);
+    gl.uniform2f(loc("u_res"), simW, simH);
+    gl.uniform1f(loc("u_c2"), c2);
+    gl.uniform1f(loc("u_damp"), damp);
+    if (impulse) {
+        gl.uniform2f(loc("u_impulse"), impulse.u, impulse.v);
+        gl.uniform1f(loc("u_impStr"), impulse.str);
+        gl.uniform1f(loc("u_impRad"), impulse.rad);
+    } else {
+        gl.uniform1f(loc("u_impStr"), 0.0);
+    }
+
+    const posLoc = gl.getAttribLocation(simProgram, "a_pos");
+    gl.enableVertexAttribArray(posLoc);
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    stateRead ^= 1;
+}
+
+function liquidFrame() {
+    if (!liquidMode) return;
+
+    // Advance the surface (two substeps per frame for a livelier medium).
+    const imp = queuedImpulse;
+    queuedImpulse = null;
+    stepLiquid(imp);
+    stepLiquid(null);
+
+    // Optional ambient rain: random droplets on a jittered cadence.
+    const rain = document.getElementById('liquidRain');
+    if (rain && rain.checked && --rainCountdown <= 0) {
+        queuedImpulse = { u: Math.random(), v: Math.random(), str: 0.05, rad: 0.02 };
+        rainCountdown = 18 + Math.floor(Math.random() * 42);
+    }
+
+    // Render the photo through the live surface.
+    activeHeightTex = stateTextures[stateRead];
+    heightAmpOverride = parseFloat(document.getElementById('valLiquidDistort').value) || 8;
+    drawWebGLPass(0.0, 1.0);
+    activeHeightTex = null;
+    heightAmpOverride = null;
+
+    displayCanvas.getContext('2d').drawImage(glCanvas, 0, 0);
+    liquidLoopId = requestAnimationFrame(liquidFrame);
+}
+
+const liquidControls = document.getElementById('liquidControls');
+
+function enterLiquidMode() {
+    if (!originalImage || !gl) return;
+    if (liquidSupported === false) return;
+    if (!initLiquidGL()) {
+        liquidSupported = false;
+        renderStateText.textContent = "Liquid: no float target";
+        renderStateText.style.color = "var(--warn)";
+        presetSelect.value = lastProceduralPreset;
+        updateMapSourceUI();
+        return;
+    }
+    liquidSupported = true;
+    liquidMode = true;
+    if (liquidControls) liquidControls.hidden = false;
+    proceduralMapControls.hidden = true;
+    importedMapControls.hidden = true;
+    mapSourceName.textContent = "Liquid Glass (live)";
+    displayCanvas.style.cursor = "crosshair";
+    renderStateText.textContent = "Liquid — live";
+    renderStateText.style.color = "var(--aqua)";
+    document.getElementById('backendStatus').textContent = "Backend: WebGL Liquid";
+
+    // A first drop so the surface is already alive on entry.
+    queuedImpulse = { u: 0.5, v: 0.55, str: 0.13, rad: 0.05 };
+    rainCountdown = 30;
+    cancelAnimationFrame(liquidLoopId);
+    liquidLoopId = requestAnimationFrame(liquidFrame);
+}
+
+function exitLiquidMode() {
+    liquidMode = false;
+    cancelAnimationFrame(liquidLoopId);
+    liquidLoopId = null;
+    activeHeightTex = null;
+    heightAmpOverride = null;
+    if (liquidControls) liquidControls.hidden = true;
+    displayCanvas.style.cursor = "";
+    renderStateText.textContent = "Idle";
+    renderStateText.style.color = "#008f82";
+    document.getElementById('backendStatus').textContent = "Backend: WebGL (GPU)";
+}
+
+// Map a pointer event on the display canvas to sim uv (top-left origin → uv).
+function pointerToUV(e) {
+    const r = displayCanvas.getBoundingClientRect();
+    const u = (e.clientX - r.left) / r.width;
+    const v = 1.0 - (e.clientY - r.top) / r.height; // framebuffer is bottom-up
+    return { u: Math.min(1, Math.max(0, u)), v: Math.min(1, Math.max(0, v)) };
+}
+
 // ─── Glass Map Generation ────────────────────────────────────────────────
 function renderImportedHeightmap() {
     if (!customMapImage) return;
@@ -420,19 +715,24 @@ function drawWebGLPass(minY, maxY) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, hiddenOriginalCanvas);
     
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, heightmapTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, hiddenHeightCanvas);
-    
+    if (activeHeightTex) {
+        // Liquid mode: sample the live wave field directly (no canvas upload).
+        gl.bindTexture(gl.TEXTURE_2D, activeHeightTex);
+    } else {
+        gl.bindTexture(gl.TEXTURE_2D, heightmapTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, hiddenHeightCanvas);
+    }
+
     // Uniforms mapping
     const loc = (name) => gl.getUniformLocation(shaderProgram, name);
     gl.uniform1i(loc("u_image"), 0);
     gl.uniform1i(loc("u_heightmap"), 1);
     gl.uniform2f(loc("u_resolution"), glCanvas.width, glCanvas.height);
-    
+
     gl.uniform1f(loc("u_distance"), params.distance);
     gl.uniform1f(loc("u_roughness"), params.roughness);
     gl.uniform1f(loc("u_ior"), params.ior);
-    gl.uniform1f(loc("u_noiseAmp"), params.noiseAmp);
+    gl.uniform1f(loc("u_noiseAmp"), heightAmpOverride !== null ? heightAmpOverride : params.noiseAmp);
     gl.uniform3fv(loc("u_tintColor"), new Float32Array(params.tintColor));
     gl.uniform1f(loc("u_absorption"), params.absorption);
     gl.uniform1f(loc("u_minY"), minY);
@@ -453,7 +753,8 @@ function drawWebGLPass(minY, maxY) {
 // Fast Preview: WebGL draws single pass directly to visible canvas
 function updatePreview() {
     if (!originalImage || isCooking) return;
-    
+    if (liquidMode) return; // the live loop owns the canvas in liquid mode
+
     const w = originalImage.width;
     const h = originalImage.height;
     
@@ -514,6 +815,7 @@ function runCookSlice() {
 
 function startCooking() {
     if (!originalImage || isCooking) return;
+    if (liquidMode) return; // live surface is already the render; use Save PNG to grab a frame
     
     isCooking = true;
     cookProgress = 0;
@@ -628,6 +930,25 @@ displayCanvas.addEventListener('pointermove', (e) => {
 displayCanvas.addEventListener('pointerleave', () => {
     pixelInfo.textContent = "hover to inspect pixels";
 });
+
+// ─── Liquid pointer disturbance ───────────────────────────────────────────
+displayCanvas.addEventListener('pointerdown', (e) => {
+    if (!liquidMode) return;
+    pointerDown = true;
+    const p = pointerToUV(e);
+    queuedImpulse = { u: p.u, v: p.v, str: 0.14, rad: 0.035 };
+    displayCanvas.setPointerCapture(e.pointerId);
+});
+
+displayCanvas.addEventListener('pointermove', (e) => {
+    if (!liquidMode || !pointerDown) return;
+    const p = pointerToUV(e);
+    queuedImpulse = { u: p.u, v: p.v, str: 0.05, rad: 0.03 };
+});
+
+const endPointer = () => { pointerDown = false; };
+displayCanvas.addEventListener('pointerup', endPointer);
+displayCanvas.addEventListener('pointercancel', endPointer);
 
 // ─── File Drag-and-Drop & Load Operations ──────────────────────────────────
 function revealWorkspace(img) {
@@ -831,6 +1152,13 @@ function initDynamicSliders() {
 // Preset changes load preset values
 presetSelect.addEventListener('change', () => {
     const val = presetSelect.value;
+
+    if (val === 'liquid') {
+        enterLiquidMode();
+        return;
+    }
+    if (liquidMode) exitLiquidMode();
+
     if (val === 'image-map') {
         customMapDirty = true;
     } else {
@@ -878,6 +1206,14 @@ saveBtn.addEventListener('click', () => {
 
 cookBtn.addEventListener('click', startCooking);
 cancelBtn.addEventListener('click', cancelCooking);
+
+// Liquid transport
+const liquidDropBtn = document.getElementById('liquidDropBtn');
+const liquidClearBtn = document.getElementById('liquidClearBtn');
+if (liquidDropBtn) liquidDropBtn.addEventListener('click', () => {
+    queuedImpulse = { u: 0.3 + Math.random() * 0.4, v: 0.3 + Math.random() * 0.4, str: 0.16, rad: 0.05 };
+});
+if (liquidClearBtn) liquidClearBtn.addEventListener('click', () => { if (liquidMode) calmLiquid(); });
 
 // Initialize Sliders
 initDynamicSliders();
